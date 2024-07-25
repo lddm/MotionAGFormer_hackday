@@ -2,4 +2,14 @@
 *.tar.xz
 *.pyc
 wandb
+
 checkpoint/*.pth.tr
+demo/lib/checkpoint/
+
+venv
+.venv
+__pycache__
+
+demo/output
+demo/video/*
+!demo/video/sample_video.mp4
