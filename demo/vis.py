@@ -10,6 +10,7 @@ import torch.nn as nn
 import glob
 from tqdm import tqdm
 import copy
+import pandas as pd
 
 sys.path.append(os.getcwd())
 from demo.lib.utils import normalize_screen_coordinates, camera_to_world
@@ -317,6 +318,52 @@ def get_pose3D(video_path, output_dir):
         plt.savefig(output_dir_pose + str(('%04d'% i)) + '_pose.png', dpi=200, bbox_inches = 'tight')
         plt.close(fig)
 
+MEDIAPIPE_TO_H36M_MAPPING = {
+    1: 'RIGHT_HIP',
+    2: 'RIGHT_KNEE',
+    3: 'RIGHT_ANKLE',
+    4: 'LEFT_HIP',
+    5: 'LEFT_KNEE',
+    6: 'LEFT_ANKLE',
+    10: 'NOSE',
+    11: 'LEFT_SHOULDER',
+    12: 'LEFT_ELBOW',
+    13: 'LEFT_WRIST',
+    14: 'RIGHT_SHOULDER',
+    15: 'RIGHT_ELBOW',
+    16: 'RIGHT_WRIST',
+}
+
+
+def load_mediapipe_keypoints(keypoints_path):
+    keypoints = {}
+    keypoints_df = pd.read_csv(keypoints_path)
+    for keypoint_name in MEDIAPIPE_TO_H36M_MAPPING.values():
+        # keypoints[keypoint_name] = keypoints_df[keypoint_name].values
+        # List of columns you want to select
+        columns_to_select = [
+            f'{keypoint_name}_x',
+            f'{keypoint_name}_y',
+            f'{keypoint_name}_z'
+        ]
+        keypoints[keypoint_name] = keypoints_df[columns_to_select].values
+    return keypoints
+
+
+def mediapipe_to_h36m(mediapipe_keypoints):
+    number_of_frames = mediapipe_keypoints['RIGHT_HIP'].shape[0]
+    h36m_keypoints = np.zeros((number_of_frames, 17, 3), dtype=np.float32)
+    # handle missing keypoints
+    for h36m_index, mediapipe_name in MEDIAPIPE_TO_H36M_MAPPING.items():
+        h36m_keypoints[:, h36m_index, :] = mediapipe_keypoints[mediapipe_name]
+
+    h36m_keypoints[0] = (mediapipe_keypoints['RIGHT_HIP'] + mediapipe_keypoints['LEFT_HIP']) / 2  # pelvis
+    h36m_keypoints[8] = (mediapipe_keypoints['RIGHT_SHOULDER'] + mediapipe_keypoints['LEFT_SHOULDER']) / 2  # base of neck
+    h36m_keypoints[7] = (h36m_keypoints[0] + h36m_keypoints[8]) / 2  # thorax
+    h36m_keypoints[9] = (h36m_keypoints[8] + h36m_keypoints[10]) / 2  # neck
+
+    return h36m_keypoints
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--video', type=str, default='sample_video.mp4', help='input video')
@@ -330,8 +377,10 @@ if __name__ == "__main__":
     output_dir = './demo/output/' + video_name + '/'
 
     get_pose2D(video_path, output_dir)
+    mediapipe_kpts_path = os.path.join('./demo/video', "svv_5d1e813b-1474-43f4-9337-a5a3c5866994-front_0_84.csv")
+    mediapipe_keypoints_original_format = load_mediapipe_keypoints(mediapipe_kpts_path)
+    mediapipe_keypoints_h36m_format = mediapipe_to_h36m(mediapipe_keypoints_original_format)
     get_pose3D(video_path, output_dir)
     img2video(video_path, output_dir)
     print('Generating demo successful!')
-
 
