@@ -270,7 +270,7 @@ def get_pose3D(video_path, output_dir, generate_demo=True, input_2D_mediapipe=Fa
             output_3D[:, :, 0, :] = 0
             post_out_all = output_3D[0].cpu().detach().numpy()
             
-        azim = 70
+        azim = 30
         for j, post_out in enumerate(post_out_all):
             rot =  [0.1407056450843811, -0.1500701755285263, -0.755240797996521, 0.6223280429840088]
             rot = np.array(rot, dtype='float32')
@@ -284,8 +284,8 @@ def get_pose3D(video_path, output_dir, generate_demo=True, input_2D_mediapipe=Fa
             gs.update(wspace=-0.00, hspace=0.05) 
             ax = plt.subplot(gs[0], projection='3d')
             show3Dpose(post_out, ax, azim=azim)
-            if j < 34:
-                azim += -1
+            # if j < 34:
+            #     azim += -1
 
             output_dir_3D = output_dir +'pose3D/'
             os.makedirs(output_dir_3D, exist_ok=True)
@@ -301,11 +301,13 @@ def get_pose3D(video_path, output_dir, generate_demo=True, input_2D_mediapipe=Fa
         ## all
         image_2d_dir = sorted(glob.glob(os.path.join(output_dir_2D, '*.png')))
         image_3d_dir = sorted(glob.glob(os.path.join(output_dir_3D, '*.png')))
+        image_3d_mediapipe_dir = sorted(glob.glob(os.path.join(output_dir + 'mediapipe_pose3D', '*.png')))
 
         print('\nGenerating demo...')
-        for i in tqdm(range(len(image_2d_dir))):
+        for i in tqdm(range(min(len(image_2d_dir), len(image_3d_dir), len(image_3d_mediapipe_dir)))):
             image_2d = plt.imread(image_2d_dir[i])
             image_3d = plt.imread(image_3d_dir[i])
+            image_3d_mediapipe = plt.imread(image_3d_mediapipe_dir[i])
 
             ## crop
             edge = 0 #(image_2d.shape[1] - image_2d.shape[0]) // 2
@@ -317,13 +319,17 @@ def get_pose3D(video_path, output_dir, generate_demo=True, input_2D_mediapipe=Fa
             ## show
             font_size = 12
             fig = plt.figure(figsize=(15.0, 5.4))
-            ax = plt.subplot(121)
+            ax = plt.subplot(131)
             showimage(ax, image_2d)
             ax.set_title("Input", fontsize = font_size)
 
-            ax = plt.subplot(122)
+            ax = plt.subplot(132)
             showimage(ax, image_3d)
             ax.set_title("Reconstruction", fontsize = font_size)
+
+            ax = plt.subplot(133)
+            showimage(ax, image_3d_mediapipe)
+            ax.set_title("Mediapipe", fontsize = font_size)
 
             ## save
             output_dir_pose = output_dir +'pose/'
@@ -400,7 +406,8 @@ if __name__ == "__main__":
     video_name = video_path.split('/')[-1].split('.')[0]
     output_dir = './demo/output/' + video_name + '/'
 
-    mediapipe_kpts_path = os.path.join('./demo/video', "svv_5d1e813b-1474-43f4-9337-a5a3c5866994-front_0_84.csv")
+    mediapipe_kpts_path = os.path.join('./demo/video', video_name + '.csv')
+    print('mediapipe_kpts_path:', mediapipe_kpts_path)
     mediapipe_keypoints_original_format = load_mediapipe_keypoints(mediapipe_kpts_path)
     mediapipe_keypoints_h36m_format = mediapipe_to_h36m(mediapipe_keypoints_original_format)
     save_mediapipe_as_h36m_format(mediapipe_keypoints_h36m_format, output_dir)
