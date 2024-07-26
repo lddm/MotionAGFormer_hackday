@@ -48,8 +48,8 @@ def show2Dpose(kps, img):
     return img
 
 
-def show3Dpose(vals, ax):
-    ax.view_init(elev=15., azim=70)
+def show3Dpose(vals, ax, azim=70):
+    ax.view_init(elev=15., azim=azim)
 
     lcolor=(0,0,1)
     rcolor=(1,0,0)
@@ -99,6 +99,8 @@ def get_pose2D(video_path, output_dir):
 
     output_npz = output_dir + 'keypoints.npz'
     np.savez_compressed(output_npz, reconstruction=keypoints)
+    # For debug
+    np.savetxt(output_dir + 'keypoints.csv', keypoints[0].reshape(keypoints.shape[1], keypoints.shape[2] * keypoints.shape[3]))
 
 
 def img2video(video_path, output_dir):
@@ -186,7 +188,7 @@ def flip_data(data, left_joints=[1, 2, 3, 14, 15, 16], right_joints=[4, 5, 6, 11
     return flipped_data
 
 @torch.no_grad()
-def get_pose3D(video_path, output_dir):
+def get_pose3D(video_path, output_dir, generate_demo=True, input_2D_mediapipe=False):
     args, _ = argparse.ArgumentParser().parse_known_args()
     args.n_layers, args.dim_in, args.dim_feat, args.dim_rep, args.dim_out = 16, 3, 128, 512, 3
     args.mlp_ratio, args.act_layer = 4, nn.GELU
@@ -226,39 +228,49 @@ def get_pose3D(video_path, output_dir):
 
     ## 3D
     print('\nGenerating 2D pose image...')
-    for i in tqdm(range(video_length)):
-        ret, img = cap.read()
-        if img is None:
-            continue
-        img_size = img.shape
+    if not input_2D_mediapipe:
+        for i in tqdm(range(video_length)):
+            ret, img = cap.read()
+            if img is None:
+                continue
+            img_size = img.shape
 
-        input_2D = keypoints[0][i]
+            if i >= keypoints.shape[1]: # video_length = keypoints frames + 1
+                break
+            input_2D = keypoints[0][i]
+            if input_2D_mediapipe:
+                input_2D[0] = input_2D[0] * img_size[0]
+                input_2D[1] = input_2D[1] * img_size[1]
 
-        image = show2Dpose(input_2D, copy.deepcopy(img))
+            image = show2Dpose(input_2D, copy.deepcopy(img))
 
-        output_dir_2D = output_dir +'pose2D/'
-        os.makedirs(output_dir_2D, exist_ok=True)
-        cv2.imwrite(output_dir_2D + str(('%04d'% i)) + '_2D.png', image)
+            output_dir_2D = output_dir +'pose2D/'
+            os.makedirs(output_dir_2D, exist_ok=True)
+            cv2.imwrite(output_dir_2D + str(('%04d'% i)) + '_2D.png', image)
 
     
     print('\nGenerating 3D pose...')
     for idx, clip in enumerate(clips):
-        input_2D = normalize_screen_coordinates(clip, w=img_size[1], h=img_size[0]) 
-        input_2D_aug = flip_data(input_2D)
-        
-        input_2D = torch.from_numpy(input_2D.astype('float32')).cuda()
-        input_2D_aug = torch.from_numpy(input_2D_aug.astype('float32')).cuda()
+        if input_2D_mediapipe:
+            post_out_all = keypoints[0]
+        else:
+            input_2D = normalize_screen_coordinates(clip, w=img_size[1], h=img_size[0]) 
+            input_2D_aug = flip_data(input_2D)
+            
+            input_2D = torch.from_numpy(input_2D.astype('float32')).cuda()
+            input_2D_aug = torch.from_numpy(input_2D_aug.astype('float32')).cuda()
 
-        output_3D_non_flip = model(input_2D) 
-        output_3D_flip = flip_data(model(input_2D_aug))
-        output_3D = (output_3D_non_flip + output_3D_flip) / 2
+            output_3D_non_flip = model(input_2D) 
+            output_3D_flip = flip_data(model(input_2D_aug))
+            output_3D = (output_3D_non_flip + output_3D_flip) / 2
 
-        if idx == len(clips) - 1:
-            output_3D = output_3D[:, downsample]
+            if idx == len(clips) - 1:
+                output_3D = output_3D[:, downsample]
 
-        output_3D[:, :, 0, :] = 0
-        post_out_all = output_3D[0].cpu().detach().numpy()
-        
+            output_3D[:, :, 0, :] = 0
+            post_out_all = output_3D[0].cpu().detach().numpy()
+            
+        azim = 70
         for j, post_out in enumerate(post_out_all):
             rot =  [0.1407056450843811, -0.1500701755285263, -0.755240797996521, 0.6223280429840088]
             rot = np.array(rot, dtype='float32')
@@ -271,7 +283,9 @@ def get_pose3D(video_path, output_dir):
             gs = gridspec.GridSpec(1, 1)
             gs.update(wspace=-0.00, hspace=0.05) 
             ax = plt.subplot(gs[0], projection='3d')
-            show3Dpose(post_out, ax)
+            show3Dpose(post_out, ax, azim=azim)
+            if j < 34:
+                azim += -1
 
             output_dir_3D = output_dir +'pose3D/'
             os.makedirs(output_dir_3D, exist_ok=True)
@@ -282,41 +296,42 @@ def get_pose3D(video_path, output_dir):
 
         
     print('Generating 3D pose successful!')
+    
+    if generate_demo:
+        ## all
+        image_2d_dir = sorted(glob.glob(os.path.join(output_dir_2D, '*.png')))
+        image_3d_dir = sorted(glob.glob(os.path.join(output_dir_3D, '*.png')))
 
-    ## all
-    image_2d_dir = sorted(glob.glob(os.path.join(output_dir_2D, '*.png')))
-    image_3d_dir = sorted(glob.glob(os.path.join(output_dir_3D, '*.png')))
+        print('\nGenerating demo...')
+        for i in tqdm(range(len(image_2d_dir))):
+            image_2d = plt.imread(image_2d_dir[i])
+            image_3d = plt.imread(image_3d_dir[i])
 
-    print('\nGenerating demo...')
-    for i in tqdm(range(len(image_2d_dir))):
-        image_2d = plt.imread(image_2d_dir[i])
-        image_3d = plt.imread(image_3d_dir[i])
+            ## crop
+            edge = 0 #(image_2d.shape[1] - image_2d.shape[0]) // 2
+            image_2d = image_2d[:, edge:image_2d.shape[1] - edge]
 
-        ## crop
-        edge = (image_2d.shape[1] - image_2d.shape[0]) // 2
-        image_2d = image_2d[:, edge:image_2d.shape[1] - edge]
+            edge = 0 #130
+            image_3d = image_3d[edge:image_3d.shape[0] - edge, edge:image_3d.shape[1] - edge]
 
-        edge = 130
-        image_3d = image_3d[edge:image_3d.shape[0] - edge, edge:image_3d.shape[1] - edge]
+            ## show
+            font_size = 12
+            fig = plt.figure(figsize=(15.0, 5.4))
+            ax = plt.subplot(121)
+            showimage(ax, image_2d)
+            ax.set_title("Input", fontsize = font_size)
 
-        ## show
-        font_size = 12
-        fig = plt.figure(figsize=(15.0, 5.4))
-        ax = plt.subplot(121)
-        showimage(ax, image_2d)
-        ax.set_title("Input", fontsize = font_size)
+            ax = plt.subplot(122)
+            showimage(ax, image_3d)
+            ax.set_title("Reconstruction", fontsize = font_size)
 
-        ax = plt.subplot(122)
-        showimage(ax, image_3d)
-        ax.set_title("Reconstruction", fontsize = font_size)
-
-        ## save
-        output_dir_pose = output_dir +'pose/'
-        os.makedirs(output_dir_pose, exist_ok=True)
-        plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
-        plt.margins(0, 0)
-        plt.savefig(output_dir_pose + str(('%04d'% i)) + '_pose.png', dpi=200, bbox_inches = 'tight')
-        plt.close(fig)
+            ## save
+            output_dir_pose = output_dir +'pose/'
+            os.makedirs(output_dir_pose, exist_ok=True)
+            plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+            plt.margins(0, 0)
+            plt.savefig(output_dir_pose + str(('%04d'% i)) + '_pose.png', dpi=200, bbox_inches = 'tight')
+            plt.close(fig)
 
 MEDIAPIPE_TO_H36M_MAPPING = {
     1: 'RIGHT_HIP',
@@ -357,16 +372,25 @@ def mediapipe_to_h36m(mediapipe_keypoints):
     for h36m_index, mediapipe_name in MEDIAPIPE_TO_H36M_MAPPING.items():
         h36m_keypoints[:, h36m_index, :] = mediapipe_keypoints[mediapipe_name]
 
-    h36m_keypoints[0] = (mediapipe_keypoints['RIGHT_HIP'] + mediapipe_keypoints['LEFT_HIP']) / 2  # pelvis
-    h36m_keypoints[8] = (mediapipe_keypoints['RIGHT_SHOULDER'] + mediapipe_keypoints['LEFT_SHOULDER']) / 2  # base of neck
-    h36m_keypoints[7] = (h36m_keypoints[0] + h36m_keypoints[8]) / 2  # thorax
-    h36m_keypoints[9] = (h36m_keypoints[8] + h36m_keypoints[10]) / 2  # neck
+    h36m_keypoints[:, 0, :] = (mediapipe_keypoints['RIGHT_HIP'] + mediapipe_keypoints['LEFT_HIP']) / 2  # pelvis
+    h36m_keypoints[:, 8, :] = (mediapipe_keypoints['RIGHT_SHOULDER'] + mediapipe_keypoints['LEFT_SHOULDER']) / 2  # base of neck
+    h36m_keypoints[:, 7, :] = (h36m_keypoints[:, 0, :] + h36m_keypoints[:, 8, :]) / 2  # thorax
+    h36m_keypoints[:, 9, :] = (h36m_keypoints[:, 8, :] + h36m_keypoints[:, 10, :]) / 2  # neck
 
     return h36m_keypoints
 
+def save_mediapipe_as_h36m_format(h36m_keypoints, output_path):
+    # save file as get_pose2D function
+    h36m_keypoints = h36m_keypoints.reshape((1,) + h36m_keypoints.shape)
+    output_dir_2D = output_path + 'mediapipe_input_2D'
+    os.makedirs(output_dir_2D, exist_ok=True)
+    np.savez_compressed(output_dir_2D + '/keypoints.npz', reconstruction=h36m_keypoints)
+        # For debug
+    np.savetxt(output_dir_2D + '/keypoints.csv', h36m_keypoints[0].reshape(h36m_keypoints.shape[1], h36m_keypoints.shape[2] * h36m_keypoints.shape[3]))
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--video', type=str, default='sample_video.mp4', help='input video')
+    parser.add_argument('--video', type=str, default='svv_5d1e813b-1474-43f4-9337-a5a3c5866994-front_0_84.mp4', help='input video')
     parser.add_argument('--gpu', type=str, default='0', help='input video')
     args = parser.parse_args()
 
@@ -376,11 +400,17 @@ if __name__ == "__main__":
     video_name = video_path.split('/')[-1].split('.')[0]
     output_dir = './demo/output/' + video_name + '/'
 
-    get_pose2D(video_path, output_dir)
     mediapipe_kpts_path = os.path.join('./demo/video', "svv_5d1e813b-1474-43f4-9337-a5a3c5866994-front_0_84.csv")
     mediapipe_keypoints_original_format = load_mediapipe_keypoints(mediapipe_kpts_path)
     mediapipe_keypoints_h36m_format = mediapipe_to_h36m(mediapipe_keypoints_original_format)
+    save_mediapipe_as_h36m_format(mediapipe_keypoints_h36m_format, output_dir)
+
+    get_pose3D(video_path, output_dir + 'mediapipe_', generate_demo=False, input_2D_mediapipe=True)
+    
+    get_pose2D(video_path, output_dir)
     get_pose3D(video_path, output_dir)
+
+
     img2video(video_path, output_dir)
     print('Generating demo successful!')
 
