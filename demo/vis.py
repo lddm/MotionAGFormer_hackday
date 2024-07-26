@@ -363,9 +363,9 @@ def load_mediapipe_keypoints(keypoints_path):
         # keypoints[keypoint_name] = keypoints_df[keypoint_name].values
         # List of columns you want to select
         columns_to_select = [
-            f'{keypoint_name}_x',
-            f'{keypoint_name}_y',
-            f'{keypoint_name}_z'
+            f'WORLD_{keypoint_name}_x',
+            f'WORLD_{keypoint_name}_y',
+            f'WORLD_{keypoint_name}_z'
         ]
         keypoints[keypoint_name] = keypoints_df[columns_to_select].values
     return keypoints
